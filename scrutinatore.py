@@ -61,6 +61,7 @@ class Scrutinatore:
         """Ricostruisce la chiave privata globale dell'ente nazionale a partire dai frammenti ricevuti"""
         secret=0
         k=len(shares_subset)
+        #Formula dell'interpolazione di lagrange
         for j in range(k): 
             xj,yj=shares_subset[j]
             num=1
@@ -73,7 +74,7 @@ class Scrutinatore:
                 den=(den*(xj-xm))%prime
             inv_den=pow(den, -1, prime)
             lagrange_basis=(num*inv_den)%prime
-            secret=(secret+yj*lagrange_basis)%prime
+            secret=(secret+yj*lagrange_basis)%prime 
         return secret
 
     #manca la somma e lo spoglio dei voti
