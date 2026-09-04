@@ -78,18 +78,43 @@ class Scrutinatore:
         return secret
 
     @staticmethod
-    def decrypt_single_vote(ciphertext_bytes, reconstructed_d, global_n)->list: 
+    def decrypt_single_vote(encrypted_vote_dict, reconstructed_d, global_n)->list: 
         """Decifra una scheda elettorale: 
-         1. Decifratura modulare con RSA: m=c^d mod N
-         2. Rimozione del padding casuale e recupero del valore di voto"""
-        c_int=int.from_bytes(ciphertext_bytes, byteorder="big")
-        m_int = pow(c_int, reconstructed_d, global_n)
-        byte_len=(global_n.bit_length()+7)//8
-        m_padded=m_int.to_bytes(byte_len, byteorder="big")
-        #Si scartano byte nulli derivanti dalla conversione
-        clean_payload=m_padded.lstrip(b"\x00")
-        vote_part=clean_payload.split(b"||")[0]
-        return json.loads(vote_part.decode("utf-8"))
+            1. Recupera i fattori primi p, q 
+            2. Istanza la chiave privata dell'Ente
+            3. Decifratura chiave di sessione con RSE-OAEP
+            4. Decifratura simmetrica del payload con AES-GCM usando la chiave di sessione 
+            inviata tramite RSA
+            5. Rimozione del padding casuale e recupero del valore di voto"""
+        p, q = rsa.rsa_recover_prime_factors(global_n, 65537, reconstructed_d)
+        dmp1 = rsa.rsa_crt_dmp1(reconstructed_d, p)
+        dmq1 = rsa.rsa_crt_dmq1(reconstructed_d, q)
+        iqmp = rsa.rsa_crt_iqmp(p, q)
+        #ricostruzione delle chiave privata RSA dell'Ente 
+        private_numbers=rsa.RSAPrivateNumbers(
+            p=p,q=q,d=reconstructed_d, 
+            dmp1=dmp1, dmq1=dmq1, iqmp=iqmp,
+            public_numbers=rsa.RSAPublicNumbers(e=65537, n=global_n)
+        )
+        private_key= private_numbers.private_key()
+        k_enc=bytes.fromhex(encrypted_vote_dict["k_enc"])
+        nonce=bytes.fromhex(encrypted_vote_dict["nonce"])
+        c_vote=bytes.fromhex(encrypted_vote_dict["c_vote"])
+       #decifrare la chiave di sessione simmetrica tramite RSA-OAEP
+        session_key = private_key.decrypt(
+            k_enc,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        #decifratura payload
+        aesgcm=AESGCM(session_key)
+        decrypted_payload=aesgcm.decrypt(nonce, c_vote, None)
+        clean_payload=decrypted_payload.split(b"||")[0]
+        return json.loads(clean_payload.decode("utf-8"))
+
 
     def compute_vote(self, encrypted_votes, quorum_shares, global_n, party_list)->dict: 
         """Esegue lo spoglio del voto: 
