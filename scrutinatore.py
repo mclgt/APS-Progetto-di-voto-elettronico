@@ -77,4 +77,50 @@ class Scrutinatore:
             secret=(secret+yj*lagrange_basis)%prime 
         return secret
 
-    #manca la somma e lo spoglio dei voti
+    @staticmethod
+    def decrypt_single_vote(ciphertext_bytes, reconstructed_d, global_n)->list: 
+        """Decifra una scheda elettorale: 
+         1. Decifratura modulare con RSA: m=c^d mod N
+         2. Rimozione del padding casuale e recupero del valore di voto"""
+        c_int=int.from_bytes(ciphertext_bytes, byteorder="big")
+        m_int = pow(c_int, reconstructed_d, global_n)
+        byte_len=(global_n.bit_lenght()+7)//8
+        m_padded=m_int.to_bytes(byte_len, byteorder="big")
+        #Si scartano byte nulli derivanti dalla conversione
+        clean_payload=m_padded.lstrip(b"\x00")
+        vote_part=clean_payload.split(b"||")[0]
+        return json.loads(vote_part.decode("utf-8"))
+
+    def compute_vote(self, encrypted_votes, quorum_shares, global_n, party_list)->dict: 
+        """Esegue lo spoglio del voto: 
+        1. Ricostruisce d tramite t frammenti
+        2. Decifra ogni scheda e aggrega le preferenze
+        3. Determina il partito vincitore
+        4. Firma il verdetto con la sua chiave privata"""
+        reconstructed_d=self.reconstruct_global_sk(quorum_shares)
+        tally={party:0 for party in party_list} #conteggio per ogni partito
+        for enc_ballot in encrypted_votes: 
+            one_hot_vector=self.decrypt_single_vote(enc_ballot, reconstructed_d, global_n)
+            for idx, bit in enumerate(one_hot_vector): 
+                if bit == 1: 
+                    tally[party_list[idx]]+=1
+                    break
+        winner=max(tally, key=tally.get)
+        verdict={
+            "scrutineer_id": self.scrutineer_id,
+            "tally":tally,
+            "winner": winner
+        }
+        verdict_bytes=json.dumps(verdict, sort_keys=True).encode("utf-8")
+        verdict_signature=self.sk.sign(
+            verdict_bytes, 
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+        return{
+            "verdict": verdict,
+            "signature": verdict_signature.hex()
+        }
