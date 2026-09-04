@@ -1,7 +1,7 @@
 import json
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization, padding, hashes 
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization, hashes 
 import secrets
 
 """Nello schema di distribuzione della chiave privata è necessario operare su 

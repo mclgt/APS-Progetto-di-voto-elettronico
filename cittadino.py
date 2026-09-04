@@ -76,6 +76,8 @@ class Cittadino:
             "nonce": nonce.hex(), 
             "c_vote": c_vote.hex()
         }
+    
+
                    
     def build_package(self, choice_idx:int, n_options:int, pk_glob:rsa.RSAPublicKey)->bytes: 
         """Costruisce il pacchetto P:{Votocifrato, Tsigm, firma_eff} da inviari ai comuni limitrofi. 

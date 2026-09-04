@@ -1,5 +1,6 @@
 import os
 import json
+import TLSSession
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 
@@ -48,11 +49,9 @@ class IdentityProvider:
         """Controllo unicità del lettore"""
         if fiscal_code in self._voted_voters:
             raise PermissionError("Tentativo di frode: Elettore già registrato per il voto.")
-
         self._voted_voters.add(fiscal_code)
-
         """Generazione dell'authorization code temporaneo"""
-        auth_code=os.urandom(16).hex
+        auth_code=os.urandom(16).hex()
         self._authorization_codes[auth_code]=pk_eff
         return auth_code
 
