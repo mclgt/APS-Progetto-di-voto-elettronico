@@ -84,7 +84,7 @@ class Scrutinatore:
          2. Rimozione del padding casuale e recupero del valore di voto"""
         c_int=int.from_bytes(ciphertext_bytes, byteorder="big")
         m_int = pow(c_int, reconstructed_d, global_n)
-        byte_len=(global_n.bit_lenght()+7)//8
+        byte_len=(global_n.bit_length()+7)//8
         m_padded=m_int.to_bytes(byte_len, byteorder="big")
         #Si scartano byte nulli derivanti dalla conversione
         clean_payload=m_padded.lstrip(b"\x00")
