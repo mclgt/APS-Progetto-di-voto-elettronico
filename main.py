@@ -54,6 +54,7 @@ class SistemaElettoraleManager:
         self.pem_pk_glob, self.global_n, self.packages = self.ente.setup_election(scrutinatori_pk)  
         # Caricamento della chiave pubblica globale per la cifratura dei voti
         self.pk_glob = serialization.load_pem_public_key(self.pem_pk_glob)  
+        print("[DEBUG] global_n coincide?", self.pk_glob.public_numbers().n == self.global_n)
         # 4. Distribuzione dei pacchetti di signcryption agli scrutinatori
         print("[SETUP] Distribuzione frammenti agli scrutinatori...")
         for s_id, scrut in self.scrutinatori.items():
@@ -66,6 +67,7 @@ class SistemaElettoraleManager:
         self.comune = Comune(idp_public_key=self.idp.public_key)
         self.blockchain = ComuneBlockchainService(self.comune)
         self.bacheca = BachecaPubblica()
+        
 
     def autentica_elettore(self, cf: str, provider: str, pk_eff_bytes: bytes):
         """
@@ -117,9 +119,31 @@ class IntegratedMainWindow(MainWindow):
         self.current_t_sign = None
         self.current_ricevuta= None
         super().__init__(root)
-        self.aggiungi_pulsante_contestazione()
         self.aggiungi_pulsante_verifica_voto()
+        self.aggiungi_pulsante_spoglio()
         self._carica_dati_iniziali_bacheca()
+
+    def aggiungi_pulsante_spoglio(self):
+        """Aggiunge il pulsante per aprire la finestra di spoglio e chiusura elezioni"""
+        btn_spoglio = tk.Button(
+            self.root,
+            text="TERMINA ELEZIONI & SPOGLIO",
+            font=("Helvetica", 9, "bold"),
+            bg="#7C3AED",
+            fg="#FFFFFF",
+            activebackground="#6D28D9",
+            activeforeground="#FFFFFF",
+            padx=10,
+            pady=4,
+            relief="flat",
+            cursor="hand2",
+            command=self.apri_finestra_spoglio
+        )
+        btn_spoglio.pack(side="right", padx=8, pady=4)
+
+    def apri_finestra_spoglio(self):
+        """Apre la finestra parallela per la gestione dello scrutinio"""
+        ScrutinioWindow(self.root, backend=self.backend)
 
     def apri_autenticazione(self):
         self.btn_vota.config(state="disabled")
@@ -169,25 +193,6 @@ class IntegratedMainWindow(MainWindow):
         except Exception:
             pass
 
-    def aggiungi_pulsante_contestazione(self):
-        dispute_frame = tk.Frame(self.root, bg="#0F172A", padx=24, pady=4)
-        dispute_frame.pack(fill="x", side="bottom")
-        # Aggiunta pulsante di contestazione nella schermata principale
-        btn_dispute = tk.Button(
-            dispute_frame,
-            text="NON TROVI IL TUO VOTO? CONTESTA",
-            font=("Helvetica", 9, "bold"),
-            bg="#DC2626",
-            fg="#FFFFFF",
-            activebackground="#B91C1C",
-            activeforeground="#FFFFFF",
-            padx=12,
-            pady=6,
-            relief="flat",
-            cursor="hand2",
-            command=self.avvia_procedura_contestazione
-        )
-        btn_dispute.pack(side="right")
 
     def aggiungi_pulsante_verifica_voto(self):
         btn_verifica = tk.Button(
@@ -200,31 +205,6 @@ class IntegratedMainWindow(MainWindow):
         )
         btn_verifica.pack(side="right", padx=8, pady=4)
         
-    def avvia_procedura_contestazione(self): 
-        """Permette al cittafino di verificare e contestare la mancata pubblicazione"""
-        if not self.current_cittadino or not getattr(self.current_cittadino, 'token_vote', None): 
-            messagebox.showwarning(
-                "Nessuna Sessione", 
-                "nessun voto espresso in memoria in questa sessione"
-            )
-            return 
-        token_hash=self.current_cittadino.get_token_hash()
-        confirmation=messagebox.askyesno(
-            "Verifica e contestazione Voto", f"Il tuo identificativo anonimo è:\n{token_hash}\n\n" "Se  non compare nella tabella, confermi l'invio della contestazione all'ente nazionale?"
-        )
-        if not confirmation: 
-            return
-        try: 
-            dispute_pack=self.current_cittadino.generate_dispute_package()
-            success, new_t_sign, msg= self.backend.processa_contestazione(dispute_pack)
-            if success: 
-                messagebox.showinfo("Esito Contestazione: Accolta\nVerrai reindirizzato alla cabina per votare di nuovo")
-                self.current_cittadino.reset_revote(new_t_sign)
-                self.apri_cabina_voto(self.current_cittadino.cf, new_t_sign)
-            else:
-                messagebox.showerror("Esito Contestazione: Respinta", msg)
-        except Exception as e: 
-            messagebox.showerror("Errore", "Impossibile generare la contestazione")
 
     def verifica_mio_voto(self):
         if not self.current_ricevuta:
@@ -303,6 +283,133 @@ class IntegratedVotingBoothWindow(VotingBoothWindow):
         except Exception as e:
             messagebox.showerror("Errore Cifratura Voto", f"Si è verificato un errore durante la cifratura: {str(e)}")
             return False, None
+
+
+class ScrutinioWindow: 
+    """
+    Finestra parallela per la gestione della chiusura delle elezioni e lo spoglio crittografico.
+    Permette agli scrutinatori di ricostruire la chiave e proclamare il vincitore
+    """
+    def __init__(self, root, backend: SistemaElettoraleManager): 
+        self.root=root
+        self.backend=backend
+        self.window= tk.Toplevel(self.root)
+        self.window.title("Spoglio Elettorale e Scrutinio")
+        self.window.geometry("700x550")
+        self.window.configure(bg="#0F172A")
+        self.window.resizable(False, False)
+        self.window.transient(self.root)
+        self.window.grab_set()
+        self._build_ui()
+
+    def _build_ui(self): 
+        header = tk.Frame(self.window, bg="#1E293B", padx=20, pady=16)
+        header.pack(fill="x")
+
+        lbl_title = tk.Label(header, text=" GESTIONE CHIUSURA SEGPI E SPOGLIO CRITTOGRAFICO", 
+                             font=("Helvetica", 11, "bold"), fg="#38BDF8", bg="#1E293B")
+        lbl_title.pack(anchor="w")
+
+        lbl_sub = tk.Label(header, text="Richiede il raggiungimento del quorum degli scrutinatori (t >= 3 su 5).", 
+                           font=("Helvetica", 9), fg="#94A3B8", bg="#1E293B")
+        lbl_sub.pack(anchor="w", pady=(2, 0))
+
+        # Body Frame
+        body = tk.Frame(self.window, bg="#FFFFFF", padx=20, pady=20)
+        body.pack(fill="both", expand=True, padx=20, pady=16)
+
+        tk.Label(body, text="Stato del Registro Blockchain:", font=("Helvetica", 10, "bold"), 
+                 fg="#0F172A", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
+
+        # Text box per log e risultati
+        self.txt_log = tk.Text(body, height=15, font=("Courier", 9), bg="#F1F5F9", fg="#0F172A", relief="solid", bd=1)
+        self.txt_log.pack(fill="both", expand=True, pady=(0, 14))
+        self.txt_log.insert("end", "Sistema pronto per la chiusura delle urne e l'avvio dello spoglio distribuito.\n")
+        self.txt_log.config(state="disabled")
+
+        # Action Bar
+        btn_frame = tk.Frame(body, bg="#FFFFFF")
+        btn_frame.pack(fill="x")
+
+        btn_esegui_spoglio = tk.Button(
+            btn_frame,
+            text="TERMINA ELEZIONI ED ESEGUI SPOGLIO",
+            font=("Helvetica", 10, "bold"),
+            bg="#2563EB",
+            fg="#FFFFFF",
+            activebackground="#1D4ED8",
+            activeforeground="#FFFFFF",
+            padx=16,
+            pady=10,
+            relief="flat",
+            cursor="hand2",
+            command=self.avvia_procedura_spoglio
+        )
+        btn_esegui_spoglio.pack(side="left")
+
+        btn_chiudi = tk.Button(
+            btn_frame,
+            text="Chiudi Finestra",
+            font=("Helvetica", 10),
+            bg="#64748B",
+            fg="#FFFFFF",
+            relief="flat",
+            padx=12,
+            pady=10,
+            command=self.window.destroy
+        )
+        btn_chiudi.pack(side="right")
+
+    def _log(self,msg:str):
+        self.txt_log.config(state="normal")
+        self.txt_log.insert("end", f"{msg}\n")
+        self.txt_log.see("end")
+        self.txt_log.config(state="disabled")
+
+    def avvia_procedura_spoglio(self): 
+        self._log("\n--AVVIO SPOGLIO--")
+        try: 
+            #Recupero dei voti cifrati dalla blockchain tramite bacheca pubblica
+            voti_grezzi=self.backend.bacheca.recupera_voti_pubblicati()
+            if not voti_grezzi: 
+                messagebox.showwarning("Nessun Voto", "Non ci sono voti registrati da scrutinare!")
+                return
+            print("[DEBUG] Esempio encrypted_vote:", voti_grezzi[0]["encrypted_vote"])
+            print("[DEBUG] Chiavi presenti:", voti_grezzi[0]["encrypted_vote"].keys() if voti_grezzi[0].get("encrypted_vote") else "MANCANTE")  
+            voti_cifrati=[v["encrypted_vote"] for v in voti_grezzi]
+            #Raccolta frammenti degli scrutinatori
+            scrutinatori_attivi=list(self.backend.scrutinatori.values())[:3]
+            quorum_shares=[s.share_point for s in scrutinatori_attivi if s.share_point is not None]
+            if len(quorum_shares)<3: 
+                messagebox.showerror("Errore quorum", "numero insufficiente di frammenti")
+                return
+            #Esecuzione spoglio con il primo scrutinatore
+            coordinatore=scrutinatori_attivi[0]
+            party_list=["Movimento Progresso & Futuro", "Alleanza Ecologista & Territorio", "Unione Civica per la Libertà", "Polo Popolare Democratico"]
+            verdetto_dict=coordinatore.compute_vote(
+                encrypted_votes=[v["encrypted_vote"]for v in voti_grezzi], 
+                quorum_shares=quorum_shares, 
+                global_n=self.backend.global_n, 
+                party_list=party_list
+            )
+            verdetto=verdetto_dict["verdict"]
+            vincitore=verdetto["winner"]
+            tally=verdetto["tally"]
+            self._log("\n--- RISULTATO FINALE DELLO SCRUTINIO ---")
+            self._log(f"🏆 PARTITO VINCITORE: {vincitore}")
+            self._log("📊 Conteggio dettagliato voti:")
+            for partito, voti in tally.items():
+                self._log(f"   • {partito}: {voti} voti")
+
+            messagebox.showinfo(
+                "Elezioni Terminate - Vincitore Eletto",
+                f"Lo spoglio si è concluso con successo!\n\nIl partito vincitore è:\n🏆 {vincitore}"
+            )
+
+        except Exception as e:
+            self._log(f"[ERRORE CRitico] Fallimento durante lo spoglio: {str(e)}")
+            messagebox.showerror("Errore Spoglio")
+
 
 
 # =============================================================================

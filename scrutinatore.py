@@ -86,34 +86,38 @@ class Scrutinatore:
             4. Decifratura simmetrica del payload con AES-GCM usando la chiave di sessione 
             inviata tramite RSA
             5. Rimozione del padding casuale e recupero del valore di voto"""
-        p, q = rsa.rsa_recover_prime_factors(global_n, 65537, reconstructed_d)
-        dmp1 = rsa.rsa_crt_dmp1(reconstructed_d, p)
-        dmq1 = rsa.rsa_crt_dmq1(reconstructed_d, q)
-        iqmp = rsa.rsa_crt_iqmp(p, q)
-        #ricostruzione delle chiave privata RSA dell'Ente 
-        private_numbers=rsa.RSAPrivateNumbers(
-            p=p,q=q,d=reconstructed_d, 
-            dmp1=dmp1, dmq1=dmq1, iqmp=iqmp,
-            public_numbers=rsa.RSAPublicNumbers(e=65537, n=global_n)
-        )
-        private_key= private_numbers.private_key()
-        k_enc=bytes.fromhex(encrypted_vote_dict["k_enc"])
-        nonce=bytes.fromhex(encrypted_vote_dict["nonce"])
-        c_vote=bytes.fromhex(encrypted_vote_dict["c_vote"])
-       #decifrare la chiave di sessione simmetrica tramite RSA-OAEP
-        session_key = private_key.decrypt(
-            k_enc,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
+        try:
+            p, q = rsa.rsa_recover_prime_factors(global_n, 65537, reconstructed_d)
+            dmp1 = rsa.rsa_crt_dmp1(reconstructed_d, p)
+            dmq1 = rsa.rsa_crt_dmq1(reconstructed_d, q)
+            iqmp = rsa.rsa_crt_iqmp(p, q)
+            #ricostruzione delle chiave privata RSA dell'Ente 
+            private_numbers=rsa.RSAPrivateNumbers(
+                p=p,q=q,d=reconstructed_d, 
+                dmp1=dmp1, dmq1=dmq1, iqmp=iqmp,
+                public_numbers=rsa.RSAPublicNumbers(e=65537, n=global_n)
             )
-        )
-        #decifratura payload
-        aesgcm=AESGCM(session_key)
-        decrypted_payload=aesgcm.decrypt(nonce, c_vote, None)
-        clean_payload=decrypted_payload.split(b"||")[0]
-        return json.loads(clean_payload.decode("utf-8"))
+            private_key= private_numbers.private_key()
+            k_enc=bytes.fromhex(encrypted_vote_dict["k_enc"])
+            nonce=bytes.fromhex(encrypted_vote_dict["nonce"])
+            c_vote=bytes.fromhex(encrypted_vote_dict["c_vote"])
+        #decifrare la chiave di sessione simmetrica tramite RSA-OAEP
+            session_key = private_key.decrypt(
+                k_enc,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            #decifratura payload
+            aesgcm=AESGCM(session_key)
+            decrypted_payload=aesgcm.decrypt(nonce, c_vote, None)
+            clean_payload=decrypted_payload.split(b"||")[0]
+            return list(clean_payload)
+        except Exception as e:
+            print(f"[DEBUG ERRORE DECR] Fallimento su scheda specifica: {str(e)}")
+            raise e
 
 
     def compute_vote(self, encrypted_votes, quorum_shares, global_n, party_list)->dict: 

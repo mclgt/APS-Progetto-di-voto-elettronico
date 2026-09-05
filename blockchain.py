@@ -101,12 +101,18 @@ class BachecaPubblica:
             for tx in blocco.transactions:
                 raw_input = tx.get("input", "")
                 #Se la transazione trasporta un payload di dati valido
-                if raw_input and raw_input!="0x":
+                if raw_input and raw_input!="0x"and raw_input != b"0x":
                     try:
-                        hex_str = raw_input.replace("0x","")
+                        if isinstance(raw_input, (bytes, bytearray)):
+                            hex_str = raw_input.hex()
+                        else:
+                            hex_str = raw_input[2:] if raw_input.startswith("0x") else raw_input
+
+                        if not hex_str:
+                            continue
+
                         json_bytes = bytes.fromhex(hex_str)
                         payload_dict = json.loads(json_bytes.decode("utf-8"))
-
                         voti_bacheca.append({
                             "tx_hash": tx.hash.hex(),
                             "block_number": blk_idx,

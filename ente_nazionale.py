@@ -138,4 +138,6 @@ class EnteNazionale:
         del d_secret
         return pem_pk_glob, global_n, packages
 
+    
+
    
