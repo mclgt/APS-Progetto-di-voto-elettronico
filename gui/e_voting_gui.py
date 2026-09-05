@@ -151,14 +151,13 @@ class MainWindow:
                             font=("Helvetica", 8), fg="#64748B", bg="#0F172A")
         lbl_foot.pack(side="left")
 
-    def _carica_dati_iniziali_bacheca(self):
-        """Carica eventuali voti pregressi o di esempio nella bacheca."""
+    """def _carica_dati_iniziali_bacheca(self):
         esempi = [
             ("TX-2026-0001", "2026-09-03 10:15:22", "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b..", "Validato"),
             ("TX-2026-0002", "2026-09-03 11:42:08", "5e884898da28047151d0e56f8dc6292773603d0d..", "Validato"),
         ]
         for v in esempi:
-            self.aggiungi_voto_in_bacheca(v[0], v[1], v[2], v[3])
+            self.aggiungi_voto_in_bacheca(v[0], v[1], v[2], v[3])"""
 
     def apri_autenticazione(self):
         """Passo 1: Apre la finestra separata di autenticazione IdP."""
@@ -260,20 +259,10 @@ class IdPAuthWindow:
         self.cf_entry = tk.Entry(card, font=("Courier", 13, "bold"), fg="#0F172A", 
                                  bg="#F1F5F9", relief="solid", bd=1)
         self.cf_entry.pack(fill="x", ipady=6, pady=(0, 4))
-        self.cf_entry.insert(0, "RSSMRA80A01H501W")
 
         lbl_hint = tk.Label(card, text="Inserisci il codice fiscale per verificare il diritto al voto.", 
                             font=("Helvetica", 8), fg="#64748B", bg="#FFFFFF")
         lbl_hint.pack(anchor="w", pady=(0, 16))
-
-        # Campo Password
-        tk.Label(card, text="PASSWORD / PIN SPID:", 
-                 font=("Helvetica", 9, "bold"), fg="#334155", bg="#FFFFFF").pack(anchor="w", pady=(0, 4))
-        
-        self.pwd_entry = tk.Entry(card, font=("Helvetica", 11), show="•", 
-                                  bg="#F1F5F9", relief="solid", bd=1)
-        self.pwd_entry.pack(fill="x", ipady=5, pady=(0, 20))
-        self.pwd_entry.insert(0, "PasswordEsempio123")
 
         # Box informativo
         info_frame = tk.Frame(card, bg="#F0FDF4", padx=12, pady=10, 
