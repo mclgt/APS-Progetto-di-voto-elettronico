@@ -36,7 +36,7 @@ class Cittadino:
         """Riceve da IdP il la struttura firmata: 
             Tsign=SignSkIdP(Token ||Pkeff) scambiata tramite l'Authorization Code su
             un canale TLS"""
-        required={"token", "pk_eff_pem", "signature"}
+        required={"token_vote", "pk_eff_pem", "signature"}
         if not required.issubset(t_sign):
             raise ValueError(f"Tsign incompleto: attesi i campi {required}")
         self.t_sign = t_sign
@@ -113,37 +113,3 @@ class Cittadino:
         if not hasattr(self, 'token_vote') or not self.token_vote: 
             return ""
         return hashlib.sha256(str(self.token_vote).encode()).hexdigest()[:32]+"..."
-
-    def generate_dispute_package(self): 
-        """
-        Genera il pacchetto relativo alla contestazione da inviare all'Ente
-        Nazionale. Dimostra il possesso del token tramite la chiave privata effimera 
-        senza svelare l'identità o il voto espresso. 
-        """
-        if self.sk_eff is None or self.t_sign is None: 
-            raise RuntimeError("Dati di voto o chiavi effimere non disponibili")
-        timestamp =datetime.now().isoformat()
-        dispute_statement={
-            "action": "CONTESTAZIONE_VOTO_MANCANTE",
-            "token": self.token_vote, 
-            "timestamp": timestamp
-        }
-        statement_bytes=json.dumps(dispute_statement, sort_keys=True).encode('utf-8')
-        signature=self.sk_eff.sign(
-            statement_bytes,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA256()
-        )
-        return{
-            "t_sign": self.t_sign, 
-            "statement": dispute_statement, 
-            "eff_signature": signature.hex()
-        }
-
-    def reset_revote(self, new_t_sign):
-        """Reimposta il cittadino con il nuovo token emesso"""
-        self.t_sign=new_t_sign
-        self.token_vote = new_t_sign["token_vote"]

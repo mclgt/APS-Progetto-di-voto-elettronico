@@ -1,6 +1,6 @@
 import os
 import json
-import TLSSession
+from TLSSession import TLSSession
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 
@@ -27,16 +27,11 @@ class IdentityProvider:
         """Tabella temporanea per gli authorization code"""
         self._authorization_codes = {}
 
-    def get_public_key(self, encrypted_session_key:bytes) -> bytes:
-        """Decifra la chiave di sessione inviata dal client"""
-        return self.public_key.decrypt(
-            encrypted_session_key,
-            padding.OAEP(
-                mgf=padding.MGF1(hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        )
+    def get_public_key(self) -> bytes:
+        return self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
 
     def request_authorization_code(self, fiscal_code: str, pk_eff:bytes)->str:
         """Verifica requisiti anagrafici e marcatura antifrode"""
@@ -67,10 +62,10 @@ class IdentityProvider:
 
         pk_eff=self._authorization_codes.pop(auth_code)
 
-        token_voto = os.urandom(16).hex()
+        token_vote = os.urandom(16).hex()
 
         """Costruzione di T_sign"""
-        payload=f"{token_voto} ||".encode("utf-8")+pk_eff
+        payload=f"{token_vote} ||".encode("utf-8")+pk_eff
 
         """Firma RSA"""
         signature=self.private_key.sign(
@@ -82,7 +77,7 @@ class IdentityProvider:
             hashes.SHA256(),
         )
         response_payload = {
-            "token_voto": token_voto,
+            "token_vote": token_vote,
             "pk_eff": pk_eff.decode("utf-8"),
             "signature": signature.hex(),
         }
