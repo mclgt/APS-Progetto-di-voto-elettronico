@@ -11,7 +11,7 @@ class Cittadino:
         self.cf=cf
         self.sk_eff=None
         self.pk_eff=None
-        self.token_vote=None
+        self.token_voto=None
         self.t_sign=None #pacchetto ricevuto dall'IdP
 
     def generate_eff_keys(self):
@@ -34,7 +34,7 @@ class Cittadino:
         """Riceve da IdP il la struttura firmata: 
             Tsign=SignSkIdP(Token ||Pkeff) scambiata tramite l'Authorization Code su
             un canale TLS"""
-        required={"token", "pk_eff_pem", "signature"}
+        required={"token_voto", "pk_eff_pem", "signature"}
         if not required.issubset(t_sign):
             raise ValueError(f"Tsign incompleto: attesi i campi {required}")
         self.t_sign = t_sign

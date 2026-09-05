@@ -1,6 +1,6 @@
 import os
 import json
-import TLSSession
+from TLSSession import TLSSession
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 
@@ -28,7 +28,10 @@ class IdentityProvider:
         self._authorization_codes = {}
 
     def get_public_key(self) -> bytes:
-        return self.public_key
+        return self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
 
     def request_authorization_code(self, fiscal_code: str, pk_eff:bytes)->str:
         """Verifica requisiti anagrafici e marcatura antifrode"""
