@@ -99,6 +99,14 @@ class SistemaElettoraleManager:
         self.blockchain_ledger.append(block)
         return tx_id
 
+    def processa_contestazione(self, dispute_package): 
+        """Inoltra la richiesta di contestazione all'Ente"""
+        return self.ente.resolve_dispute(
+            dispute_package=dispute_package, 
+            blockchain_list=self.blockchain_ledger, 
+            idp_pk=self.idp.public_key
+        )
+
 
 # =============================================================================
 # ESTENSIONE DELLA GUI PER INTEGRARE IL BACKEND CRITTOGRAFICO
@@ -109,6 +117,7 @@ class IntegratedMainWindow(MainWindow):
         self.current_cittadino = None
         self.current_t_sign = None
         super().__init__(root)
+        self.aggiungi_pulsante_contestazione()
 
     def apri_autenticazione(self):
         self.btn_vota.config(state="disabled")
@@ -140,6 +149,52 @@ class IntegratedMainWindow(MainWindow):
     def _carica_dati_iniziali_bacheca(self):
         # Svuota i dati di esempio e mostra la bacheca reale collegata al backend
         pass
+
+    def aggiungi_pulsante_contestazione(self):
+        dispute_frame = tk.Frame(self.root, bg="#0F172A", padx=24, pady=4)
+        dispute_frame.pack(fill="x", side="bottom")
+        # Aggiunta pulsante di contestazione nella schermata principale
+        btn_dispute = tk.Button(
+            dispute_frame,
+            text="NON TROVI IL TUO VOTO? CONTESTA",
+            font=("Helvetica", 9, "bold"),
+            bg="#DC2626",
+            fg="#FFFFFF",
+            activebackground="#B91C1C",
+            activeforeground="#FFFFFF",
+            padx=12,
+            pady=6,
+            relief="flat",
+            cursor="hand2",
+            command=self.avvia_procedura_contestazione
+        )
+        btn_dispute.pack(side="right")
+    
+    def avvia_procedura_contestazione(self): 
+        """Permette al cittafino di verificare e contestare la mancata pubblicazione"""
+        if not self.current_cittadino or not getattr(self.current_cittadino, 'token_voto', None): 
+            messagebox.showwarning(
+                "Nessuna Sessione", 
+                "nessun voto espresso in memoria in questa sessione"
+            )
+            return 
+        token_hash=self.current_cittadino.get_token_hash()
+        confirmation=messagebox.askyesno(
+            "Verifica e contestazione Voto", f"Il tuo identificativo anonimo è:\n{token_hash}\n\n" "Se  non compare nella tabella, confermi l'invio della contestazione all'ente nazionale?"
+        )
+        if not confirmation: 
+            return
+        try: 
+            dispute_pack=self.current_cittadino.generate_dispute_package()
+            success, new_t_sign, msg= self.backend.processa_contestazione(dispute_pack)
+            if success: 
+                messagebox.showinfo("Esito Contestazione: Accolta\nVerrai reindirizzato alla cabina per votare di nuovo")
+                self.current_cittadino.reset_revote(new_t_sign)
+                self.apri_cabina_voto(self.current_cittadino.cf, new_t_sign)
+            else:
+                messagebox.showerror("Esito Contestazione: Respinta", msg)
+        except Exception as e: 
+            messagebox.showerror("Errore", "Impossibile generare la contestazione")
 
 
 class IntegratedIdPAuthWindow(IdPAuthWindow):

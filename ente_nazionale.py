@@ -1,4 +1,5 @@
 import json
+import hashlib
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes 
@@ -22,6 +23,7 @@ class EnteNazionale:
             key_size=2048
         )
         self.pk = self.sk.public_key()
+        self.revoked_tokens=set() #insieme dei token invalidati
 
 
     def get_pk_pem(self)->bytes:
@@ -135,3 +137,68 @@ class EnteNazionale:
         del sk_glob
         del d_secret
         return pem_pk_glob, global_n, packages
+
+    def resolve_dispute(self, dispute_package, blockchain_list, idp_pk:rsa.RSAPublicKey): 
+        """Valida la contestazione dell'elettore e rilascia un nuovo token se
+          e solo se il vecchio voto non è presente in bacheca"""
+        try: 
+            t_sign=dispute_package["t_sign"]
+            statement=dispute_package["statement"]
+            eff_sign= bytes.fromhex(dispute_package["eff_signature"])
+            token=statement["token"]
+            pk_eff_pem=t_sign.get("pk_eff_pem")
+            idp_sig = bytes.fromhex(t_sign["signature"])
+            #verifica della validità della firma dell'IdP sul Token
+            payload_idp=f"{token} ||".encode("utf-8")
+            idp_pk.verify(
+                idp_sig,
+                payload_idp,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH,
+                ),
+                hashes.SHA256()
+            )
+            #verifica che chi contesta possieda la chiave effimera contenuta nel pacchetto dell'idp
+            pk_eff=serialization.load_pem_public_key(pk_eff_pem.encode("utf-8"))
+            statement_bytes=json.dumps(statement, sort_keys=True).encode("utf-8")
+            pk_eff.verify(
+                eff_sign,
+                statement_bytes,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+            #si verifica se il token è stato già revocato
+            if token in self.revoked_tokens:
+                return False,None,"Contestazione respinta: il token è stato già revocato"
+            #si verifica sulla blockchain se il voto è realmente mancante
+            token_hash=hashlib.sha256(str(token).encode()).hexdigest()[:32]+"..."
+            vote_found= any(b.get("token_hash")==token_hash for b in blockchain_list)
+            if vote_found: 
+                return False, None, f"Contestazione respinta: il voto è registrato in bacheca"
+            #altrimenti la contestazione viene accettata
+            self.revoked_tokens.add(token)
+            new_token=os.urandom(16).hex()
+            new_payload=f"{new_token}||".encode("utf-8")+pk_eff_pem.encode("utf-8")
+            new_signature=self.sk.sign(
+                new_payload,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+            new_t_sign = {
+                "token": new_token,
+                "token_voto": new_token,
+                "pk_eff_pem": pk_eff_pem,
+                "signature": new_signature.hex(),
+                "recovered_by": self.id
+            }
+            return True, new_t_sign, f"Contestazione ACCOLTA: Il vecchio token  è stato revocato. Emesso nuovo token di voto."
+
+        except Exception as e:
+            return False, None, f"Errore durante l'elaborazione della contestazione"

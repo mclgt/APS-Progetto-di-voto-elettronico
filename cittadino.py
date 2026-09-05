@@ -1,6 +1,8 @@
 import os
 import json
 import secrets
+import hashlib
+from datetime import datetime
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat. primitives import hashes
@@ -38,7 +40,7 @@ class Cittadino:
         if not required.issubset(t_sign):
             raise ValueError(f"Tsign incompleto: attesi i campi {required}")
         self.t_sign = t_sign
-        self.token_voto = t_sign["token_voto"]
+        self.token_vote = t_sign["token_vote"]
 
     @staticmethod
     def one_hot_encode(choice_idx: int, n_options: int)->bytes: 
@@ -105,3 +107,43 @@ class Cittadino:
             "signature":signature.hex()
         }
         return json.dumps(package).encode("utf-8")
+
+    def get_token_hash(self):
+        """Calcola l'identificativo anonimo mostrato nella bacheca"""
+        if not hasattr(self, 'token_vote') or not self.token_vote: 
+            return ""
+        return hashlib.sha256(str(self.token_vote).encode()).hexdigest()[:32]+"..."
+
+    def generate_dispute_package(self): 
+        """
+        Genera il pacchetto relativo alla contestazione da inviare all'Ente
+        Nazionale. Dimostra il possesso del token tramite la chiave privata effimera 
+        senza svelare l'identità o il voto espresso. 
+        """
+        if self.sk_eff is None or self.t_sign is None: 
+            raise RuntimeError("Dati di voto o chiavi effimere non disponibili")
+        timestamp =datetime.now().isoformat()
+        dispute_statement={
+            "action": "CONTESTAZIONE_VOTO_MANCANTE",
+            "token": self.token_vote, 
+            "timestamp": timestamp
+        }
+        statement_bytes=json.dumps(dispute_statement, sort_keys=True).encode('utf-8')
+        signature=self.sk_eff.sign(
+            statement_bytes,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+        return{
+            "t_sign": self.t_sign, 
+            "statement": dispute_statement, 
+            "eff_signature": signature.hex()
+        }
+
+    def reset_revote(self, new_t_sign):
+        """Reimposta il cittadino con il nuovo token emesso"""
+        self.t_sign=new_t_sign
+        self.token_vote = new_t_sign["token_vote"]
