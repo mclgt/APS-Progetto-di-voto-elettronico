@@ -10,7 +10,9 @@ Questo file coordina l'intera architettura:
 5. Integrazione con la GUI Tkinter (e_voting_gui.py) collegando i punti di aggancio
    alla logica crittografica reale (Autenticazione IdP, Generazione chiavi effimere,
    Cifratura ibrida del voto, firma e inserimento nel registro/blockchain comunale).
-6. Gestione della fase di spoglio finale da parte degli scrutinatori.
+6. Autorità Comunale: Doppia verifica crittografica sequenziale (Firma IdP + Firma effimera)
+7. Generazione Merkle Tree, registrazione su Ganache (Web3) e Bacheca Pubblica append_only.
+8. Gestione della fase di spoglio finale da parte degli scrutinatori.
 =============================================================================
 """
 
@@ -18,12 +20,19 @@ import tkinter as tk
 from tkinter import messagebox
 import json
 import os
-from cryptography.hazmat.primitives import serialization
+
+from web3 import Web3
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+
 from ente_nazionale import EnteNazionale
 from scrutinatore import Scrutinatore
 from identity_provider import IdentityProvider
 from cittadino import Cittadino
 from TLSSession import TLSSession
+from comune import Comune
+from blockchain import ComuneBlockchainService, BachecaPubblica
+from merkle_tree import MerkleTree
 from gui.e_voting_gui import MainWindow, IdPAuthWindow, VotingBoothWindow, LISTE_ELETTORALI
 
 class SistemaElettoraleManager:
@@ -54,9 +63,11 @@ class SistemaElettoraleManager:
         # 5. Identity Provider
         self.idp = IdentityProvider()
         # 6. Registro / Blockchain Comunale (Simulazione ledger append-only)
-        self.blockchain_ledger = []
+        self.comune = Comune(idp_public_key=self.idp.public_key)
+        self.blockchain = ComuneBlockchainService(self.comune)
+        self.bacheca = BachecaPubblica()
 
-    def autentica_elettore(self, cf: str, provider: str, password: str, pk_eff_bytes: bytes):
+    def autentica_elettore(self, cf: str, provider: str, pk_eff_bytes: bytes):
         """
         Gestisce l'autenticazione tramite IdP:
         1. Richiede l'authorization code all'IdP.
@@ -78,8 +89,8 @@ class SistemaElettoraleManager:
             resp_bytes = client_tls.receive_encrypted(tls_resp_nonce, tls_resp_ciphertext)
             resp_data = json.loads(resp_bytes.decode("utf-8"))
             t_sign = {
-                "token": resp_data["token_voto"],
-                "token_voto": resp_data["token_voto"],
+                "token": resp_data["token_vote"],
+                "token_vote": resp_data["token_vote"],
                 "pk_eff_pem": resp_data["pk_eff"],
                 "signature": resp_data["signature"]
             }
@@ -87,17 +98,13 @@ class SistemaElettoraleManager:
         except Exception as e:
             return False, None, str(e)
 
-    def registra_voto_blockchain(self, package_bytes: bytes, token_hash: str):
-        """Registra il pacchetto di voto anonimo nella blockchain/bacheca comunale"""
-        tx_id = f"TX-2026-{len(self.blockchain_ledger) + 1:04d}"
-        block = {
-            "tx_id": tx_id,
-            "token_hash": token_hash,
-            "package": package_bytes.hex(),
-            "status": "Validato"
-        }
-        self.blockchain_ledger.append(block)
-        return tx_id
+    def processa_contestazione(self, dispute_package): 
+        """Inoltra la richiesta di contestazione all'Ente"""
+        return self.ente.resolve_dispute(
+            dispute_package=dispute_package, 
+            blockchain_list=self.blockchain_ledger, 
+            idp_pk=self.idp.public_key
+        )
 
 
 # =============================================================================
@@ -108,7 +115,11 @@ class IntegratedMainWindow(MainWindow):
         self.backend = backend
         self.current_cittadino = None
         self.current_t_sign = None
+        self.current_ricevuta= None
         super().__init__(root)
+        self.aggiungi_pulsante_contestazione()
+        self.aggiungi_pulsante_verifica_voto()
+        self._carica_dati_iniziali_bacheca()
 
     def apri_autenticazione(self):
         self.btn_vota.config(state="disabled")
@@ -137,9 +148,97 @@ class IntegratedMainWindow(MainWindow):
             on_cancel=self._riabilita_tasto_voto
         )
 
+    def on_voto_completato(self, dati_scheda: dict):
+        self.current_ricevuta=dati_scheda.get("ricevuta")
+        super().on_voto_completato(dati_scheda)
+        self._carica_dati_iniziali_bacheca()
+
     def _carica_dati_iniziali_bacheca(self):
-        # Svuota i dati di esempio e mostra la bacheca reale collegata al backend
-        pass
+        """
+        Legge direttamente i blocchi dalla blockchain tramite la Bacheca Pubblica
+        """
+        try:
+            for item in self.tree_bacheca.get_children():
+                self.tree_bacheca.delete(item)
+            voti = self.backend.bacheca.recupera_voti_pubblicati()
+            for v in voti:
+                tx_short = v["tx_hash"][:16] + "..."
+                token_h_short = v["token_hash"][:24] + "..." if v.get("token_hash") else "N/A"
+                merkle_short = v["merkle_root"][:24] + "..." if v.get("merkle_root") else "N/A"
+                self.tree_bacheca.insert("","end",values=(tx_short, token_h_short, merkle_short,f"Blocco #{v['block_number']}"))
+        except Exception:
+            pass
+
+    def aggiungi_pulsante_contestazione(self):
+        dispute_frame = tk.Frame(self.root, bg="#0F172A", padx=24, pady=4)
+        dispute_frame.pack(fill="x", side="bottom")
+        # Aggiunta pulsante di contestazione nella schermata principale
+        btn_dispute = tk.Button(
+            dispute_frame,
+            text="NON TROVI IL TUO VOTO? CONTESTA",
+            font=("Helvetica", 9, "bold"),
+            bg="#DC2626",
+            fg="#FFFFFF",
+            activebackground="#B91C1C",
+            activeforeground="#FFFFFF",
+            padx=12,
+            pady=6,
+            relief="flat",
+            cursor="hand2",
+            command=self.avvia_procedura_contestazione
+        )
+        btn_dispute.pack(side="right")
+
+    def aggiungi_pulsante_verifica_voto(self):
+        btn_verifica = tk.Button(
+            self.root,
+            text="VERIFICA IL MIO VOTO",
+            font=("Helvetica", 9, "bold"),
+            bg="#16A34A",
+            fg="#FFFFFF",
+            command=self.verifica_mio_voto
+        )
+        btn_verifica.pack(side="right", padx=8, pady=4)
+        
+    def avvia_procedura_contestazione(self): 
+        """Permette al cittafino di verificare e contestare la mancata pubblicazione"""
+        if not self.current_cittadino or not getattr(self.current_cittadino, 'token_vote', None): 
+            messagebox.showwarning(
+                "Nessuna Sessione", 
+                "nessun voto espresso in memoria in questa sessione"
+            )
+            return 
+        token_hash=self.current_cittadino.get_token_hash()
+        confirmation=messagebox.askyesno(
+            "Verifica e contestazione Voto", f"Il tuo identificativo anonimo è:\n{token_hash}\n\n" "Se  non compare nella tabella, confermi l'invio della contestazione all'ente nazionale?"
+        )
+        if not confirmation: 
+            return
+        try: 
+            dispute_pack=self.current_cittadino.generate_dispute_package()
+            success, new_t_sign, msg= self.backend.processa_contestazione(dispute_pack)
+            if success: 
+                messagebox.showinfo("Esito Contestazione: Accolta\nVerrai reindirizzato alla cabina per votare di nuovo")
+                self.current_cittadino.reset_revote(new_t_sign)
+                self.apri_cabina_voto(self.current_cittadino.cf, new_t_sign)
+            else:
+                messagebox.showerror("Esito Contestazione: Respinta", msg)
+        except Exception as e: 
+            messagebox.showerror("Errore", "Impossibile generare la contestazione")
+
+    def verifica_mio_voto(self):
+        if not self.current_ricevuta:
+            messagebox.showwarning(
+                "Nessuna Ricevuta",
+                "Non hai ancora una ricevuta di voto in questa sessione."
+            )
+            return
+
+        esito, msg = self.backend.bacheca.esegui_verifica_individuale(self.current_ricevuta)
+        if esito:
+            messagebox.showinfo("Voto Verificato", msg)
+        else:
+            messagebox.showerror("Verifica Fallita", msg)
 
 
 class IntegratedIdPAuthWindow(IdPAuthWindow):
@@ -150,9 +249,9 @@ class IntegratedIdPAuthWindow(IdPAuthWindow):
         self.on_auth_success_callback = on_auth_success
         super().__init__(root, on_auth_success=lambda cf: None, on_cancel=on_cancel)
 
-    def on_authenticate_logic(self, cf: str, provider: str, password: str):
+    def on_authenticate_logic(self, cf: str, provider: str):
         pk_eff_pem = self.cittadino.get_pk_eff_pem()
-        success, t_sign, msg = self.manager.autentica_elettore(cf, provider, password, pk_eff_pem)
+        success, t_sign, msg = self.manager.autentica_elettore(cf, provider, pk_eff_pem)
         if success:
             self.t_sign_result = t_sign
             return True, msg
@@ -162,13 +261,10 @@ class IntegratedIdPAuthWindow(IdPAuthWindow):
     def _submit_auth(self):
         cf = self.cf_entry.get().strip().upper()
         provider = self.provider_var.get()
-        pwd = self.pwd_entry.get()
-
         if len(cf) != 16:
             messagebox.showwarning("Formato Non Valido", "Il Codice Fiscale deve essere di 16 caratteri!")
             return
-
-        success, msg = self.on_authenticate_logic(cf, provider, pwd)
+        success, msg = self.on_authenticate_logic(cf, provider)
         if success:
             messagebox.showinfo("Accesso Autorizzato", f"Identità verificata con successo via {provider}.Rilascio token e apertura cabina elettorale protetta.")
             self.window.destroy()
@@ -192,17 +288,16 @@ class IntegratedVotingBoothWindow(VotingBoothWindow):
             package_bytes = self.cittadino.build_package(choice_idx, n_options, self.manager.pk_glob)
             
             # Calcolo di un hash anonimo del token per la bacheca pubblica
-            import hashlib
-            token_val = self.cittadino.token_voto if hasattr(self.cittadino, "token_voto") else "token_anonimo"
-            token_hash = hashlib.sha256(str(token_val).encode()).hexdigest()[:32] + "..."
-            
-            # Registrazione nella blockchain/registro comunale
-            tx_id = self.manager.registra_voto_blockchain(package_bytes, token_hash)
+            success, msg, ricevuta = self.manager.blockchain.sottometti_e_registra_voto(package_bytes)
+            if not success:
+                messagebox.showerror("Errore validazione comune", msg)
+                return False, None
             
             dati_scheda = {
-                "tx_id": tx_id,
-                "token_hash": token_hash,
-                "package_bytes": package_bytes
+                "tx_id": ricevuta["tx_hash"][:18]+"...",
+                "token_hash": ricevuta["token_hash"][:24]+"...",
+                "package_bytes": package_bytes,
+                "ricevuta": ricevuta
             }
             return True, dati_scheda
         except Exception as e:

@@ -1,6 +1,8 @@
 import os
 import json
 import secrets
+import hashlib
+from datetime import datetime
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat. primitives import hashes
@@ -34,11 +36,11 @@ class Cittadino:
         """Riceve da IdP il la struttura firmata: 
             Tsign=SignSkIdP(Token ||Pkeff) scambiata tramite l'Authorization Code su
             un canale TLS"""
-        required={"token", "pk_eff_pem", "signature"}
+        required={"token_vote", "pk_eff_pem", "signature"}
         if not required.issubset(t_sign):
             raise ValueError(f"Tsign incompleto: attesi i campi {required}")
         self.t_sign = t_sign
-        self.token_voto = t_sign["token_voto"]
+        self.token_vote = t_sign["token_vote"]
 
     @staticmethod
     def one_hot_encode(choice_idx: int, n_options: int)->bytes: 
@@ -105,3 +107,9 @@ class Cittadino:
             "signature":signature.hex()
         }
         return json.dumps(package).encode("utf-8")
+
+    def get_token_hash(self):
+        """Calcola l'identificativo anonimo mostrato nella bacheca"""
+        if not hasattr(self, 'token_vote') or not self.token_vote: 
+            return ""
+        return hashlib.sha256(str(self.token_vote).encode()).hexdigest()[:32]+"..."

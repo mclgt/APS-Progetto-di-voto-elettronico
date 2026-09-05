@@ -1,4 +1,5 @@
 import json
+import hashlib
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes 
@@ -22,6 +23,7 @@ class EnteNazionale:
             key_size=2048
         )
         self.pk = self.sk.public_key()
+        self.revoked_tokens=set() #insieme dei token invalidati
 
 
     def get_pk_pem(self)->bytes:
@@ -135,3 +137,5 @@ class EnteNazionale:
         del sk_glob
         del d_secret
         return pem_pk_glob, global_n, packages
+
+   
