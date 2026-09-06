@@ -4,7 +4,7 @@ Questo file coordina l'architettura:
 2. Inizializzazione degli Scrutinatori e ricezione dei frammenti (Signcryption).
 3. Inizializzazione dell'Identity Provider (IdP) con il registro degli elettori.
 4. Simulazione del canale TLS tra Cittadino e IdP.
-5. Integrazione con la GUI collegando i punti l'interfacccia alla logica
+5. Integrazione con la GUI collegando i punti l'interfaccia alla logica
   (Autenticazione IdP, Generazione chiavi effimere, Cifratura ibrida del voto, 
   firma e inserimento nel registro/blockchain comunale).
 6. Autorità Comunale: Doppia verifica crittografica sequenziale (Firma IdP + Firma effimera)
@@ -96,17 +96,16 @@ class SistemaElettoraleManager:
             return False, None, str(e)
 
 
-#Estensione GUI (da spostare)
 class FinesttraMainIntergrata(MainWindow):
     def __init__(self, root, backend: SistemaElettoraleManager):
         self.backend = backend
         self.current_cittadino = None
         self.current_t_firma = None
-        self.current_ricevuta= None
+        self.current_ricevuta = None
+       
         super().__init__(root)
         self.aggiungi_pulsante_verifica_voto()
         self.aggiungi_pulsante_spoglio()
-        self._carica_dati_iniziali_bacheca()
 
     def aggiungi_pulsante_spoglio(self):
         """Aggiunge il pulsante per aprire la finestra di spoglio e chiusura elezioni"""
@@ -158,14 +157,12 @@ class FinesttraMainIntergrata(MainWindow):
         )
 
     def on_voto_completato(self, dati_scheda: dict):
-        self.current_ricevuta=dati_scheda.get("ricevuta")
+        self.current_ricevuta = dati_scheda.get("ricevuta")
         super().on_voto_completato(dati_scheda)
         self._carica_dati_iniziali_bacheca()
 
     def _carica_dati_iniziali_bacheca(self):
-        """
-        Legge direttamente i blocchi dalla blockchain tramite la Bacheca Pubblica
-        """
+        
         try:
             for el in self.tree.get_children():
                 self.tree.delete(el)
@@ -212,9 +209,13 @@ class FinestraIdpAuthIntegrata(IdPAuthWindow):
         self.manager = backend
         self.cittadino = istanza_cittadino
         self.on_auth_success_callback = on_auth_success
-        super().__init__(root, on_auth_success=lambda cf: None, on_cancellazione=on_cancellazione)
+        self.t_firma_result = None
+        super().__init__(root, on_auth_success=self._inoltra_successo_con_token, on_cancellazione=on_cancellazione)
 
-    def on_authenticate_logic(self, cf: str, provider: str):
+    def _inoltra_successo_con_token(self, cf: str):
+        self.on_auth_success_callback(cf, self.t_firma_result)
+
+    def on_logica_autenticazione(self, cf: str, provider: str):
         pk_eff_pem = self.cittadino.get_pk_eff_pem()
         success, t_firma, msg = self.manager.autentica_elettore(cf, provider, pk_eff_pem)
         if success:
@@ -222,20 +223,6 @@ class FinestraIdpAuthIntegrata(IdPAuthWindow):
             return True, msg
         else:
             return False, msg
-
-    def sottometti_auth(self):
-        cf = self.cf_entry.get().strip().upper()
-        provider = self.provider_var.get()
-        if len(cf) != 16:
-            messagebox.showwarning("Formato Non Valido", "Il Codice Fiscale deve essere di 16 caratteri!")
-            return
-        success, msg = self.on_authenticate_logic(cf, provider)
-        if success:
-            messagebox.showinfo("Accesso Autorizzato", f"Identità verificata con successo via {provider}.Rilascio token e apertura cabina elettorale protetta.")
-            self.window.destroy()
-            self.on_auth_success_callback(cf, self.t_firma_result)
-        else:
-            messagebox.showerror("Accesso Negato", msg)
 
 
 class FinestraVotoIntegrata(FinestraVoto):

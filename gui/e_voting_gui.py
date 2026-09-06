@@ -1,11 +1,10 @@
-
 """
 Flusso applicativo richiesto:
   1. SCHERMATA PRINCIPALE (MainWindow):
      - Contiene la Bacheca Pubblica dei Voti (tabella append-only con le schede registrate).
      - Contiene il pulsante principale per avviare la procedura di voto.
   2. SCHERMATA DI AUTENTICAZIONE IdP (IdPAuthWindow):
-     - Finestra separata per inserimento Codice Fiscale, Provider SPID/CIE e password.
+     - Finestra separata per inserimento Codice Fiscale e Provider SPID/CIE.
      - In caso di successo, avvia la cabina di voto.
   3. SCHERMATA CABINA ELETTORALE (FinestraVoto):
      - Scheda elettorale a lista chiusa per la selezione della preferenza.
@@ -147,6 +146,12 @@ class MainWindow:
         self.tree.insert("", "end", values=(tx_id, timestamp, token_hash, stato))
         self.lbl_count.config(text=f"Totale Schede: {len(self.voti_registrati)}")
 
+    def _carica_dati_iniziali_bacheca(self):
+        """
+        Hook di caricamento iniziale della bacheca.
+        """
+        pass
+
     def _riabilita_tasto_voto(self):
         self.btn_vota.config(state="normal")
 
@@ -203,6 +208,7 @@ class IdPAuthWindow:
         lbl_hint = tk.Label(card, text="Inserisci il codice fiscale per verificare il diritto al voto.", 
                             font=("Helvetica", 8), fg="#64748B", bg="#FFFFFF")
         lbl_hint.pack(anchor="w", pady=(0, 16))
+       
         # Box informativo
         info_frame = tk.Frame(card, bg="#F0FDF4", padx=12, pady=10, 
                               highlightthickness=1, highlightbackground="#BBF7D0")
@@ -222,11 +228,10 @@ class IdPAuthWindow:
     def sottometti_auth(self):
         cf = self.cf_entry.get().strip().upper()
         provider = self.provider_var.get()
-        pwd = self.pwd_entry.get()
         if len(cf) != 16:
             messagebox.showwarning("Formato Non Valido", "Il Codice Fiscale deve essere di 16 caratteri!")
             return
-        success, msg = self.on_logica_autenticazione(cf, provider, pwd)
+        success, msg = self.on_logica_autenticazione(cf, provider)
         if success:
             messagebox.showinfo("Accesso Autorizzato", f"Identità verificata con successo via {provider}.\nSi apre la cabina elettorale.")
             self.window.destroy()
@@ -234,10 +239,7 @@ class IdPAuthWindow:
         else:
             messagebox.showerror("Accesso Negato", msg)
 
-    def on_logica_autenticazione(self, cf: str):
-        """
-            Effettua il controllo dei dati
-        """
+    def on_logica_autenticazione(self, cf: str, provider: str):
         if len(cf) == 16:
             return True, "Autenticato con successo"
         return False, "Codice Fiscale non valido"
@@ -252,7 +254,7 @@ class IdPAuthWindow:
 # 3. SCHERMATA CABINA ELETTORALE DIGITALE (ACQUISIZIONE VOTO)
 class FinestraVoto:
     """
-    Finestra della Cabina Elettorale (separata e disaccoppiata).
+    Finestra della Cabina Elettorale.
     - L'elettore seleziona la preferenza per una delle liste chiuse.
     - Alla conferma, restituisce i dati del voto e si chiude,
       riportando l'utente alla Bacheca Principale.
@@ -378,9 +380,6 @@ class FinestraVoto:
             self.on_voto_confermato(dati_scheda)
 
     def on_sottometti_voto_logica(self, lista_scelta: dict):
-        """
-        Richiama l'algoritmo di voto
-        """
         id_fittizio = f"TX-2026-{lista_scelta['sigla']}-987"
         token_hash_fittizio = f"sha256_{lista_scelta['sigla']}_mock_token_leaf"
         return True, {"tx_id": id_fittizio, "token_hash": token_hash_fittizio}
