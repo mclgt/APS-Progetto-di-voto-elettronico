@@ -5,73 +5,60 @@ from comune import Comune
 from merkle_tree import MerkleTree
 
 class ComuneBlockchainService:
-    def __init__(self, comune_instance: Comune, rcp_url: str = "http://127.0.0.1:7545"):
+    def __init__(self, istanza_comune: Comune, rcp_url: str = "http://127.0.0.1:7545"):
         """
         Servizio del comune che connette la logica crittografica a Ganache.
         Contiene un'istanza della classe comune già inizializzata con la PK dell'IdP e un ednpoint RPC del nodo Ganache locale. 
         """
-        self.comune=comune_instance
+        self.comune=istanza_comune
         self.w3=Web3(Web3.HTTPProvider(rcp_url))
-
         if not self.w3.is_connected():
             raise ConnectionError(f"Impossibile connettersi al nodo Ganache")
-
         #Seleziona il primo account di Ganache come indirizzo istituzionale del Comune
-        self.comune_address = self.w3.eth.accounts[0]
-        self.w3.eth.default_account = self.comune_address
-
+        self.indirizzo_comune = self.w3.eth.accounts[0]
+        self.w3.eth.default_account = self.indirizzo_comune
         #struttura interna per mantenere merkle tree aggiornato
         self.merkle_tree: MerkleTree = None
 
-    def sottometti_e_registra_voto(self, package_bytes: bytes)->tuple[bool, str, dict]:
+    def sottometti_e_registra_voto(self, bytes_pacchetto: bytes)->tuple[bool, str, dict]:
         """
         1. Valida crittograficamente il pacchetto tramite il Comune
         2. Aggiorna i merkle tree includendo la nuova scheda
         3. Costruisce e invia la transazone verso Ganache con il payload dei dati
         4. Restituisce al cittadino la ricevuta crittografica per la verifica individuale
         """
-        #1
-        valido, msg, scheda = self.comune.valida_pacchetto_voto(package_bytes)
+        valido, msg, scheda = self.comune.valida_pacchetto_voto(bytes_pacchetto)
         if not valido:
             return False, msg, {}
-
-        #2
-        self.merkle_tree = MerkleTree(self.comune.validated_vote)
+        self.merkle_tree = MerkleTree(self.comune.voti_validi)
         merkle_root_attuale = self.merkle_tree.get_root()
-        indice_scheda = len(self.comune.validated_vote)-1
+        indice_scheda = len(self.comune.voti_validi)-1
         merkle_proof = self.merkle_tree.get_proof(indice_scheda)
-
         #calcolo hash anonimo del token per il riferimento pubblico
-        token_hash = hashlib.sha256(scheda["token_vote"].encode("utf-8")).hexdigest()
-
-        #3
+        token_hash = hashlib.sha256(scheda["token_voto"].encode("utf-8")).hexdigest()
         dati_transazione = {
             "token_hash": token_hash,
-            "encrypted_vote": scheda["encrypted_vote"],
+            "voto_cifrato": scheda["voto_cifrato"],
             "merkle_root": merkle_root_attuale
         }
-        raw_payload_bytes = json.dumps(dati_transazione, sort_keys=True).encode("utf-8")
-        hex_data_payload = "0x"+raw_payload_bytes.hex()
-
-        #4
+        payload_bytes_grezzi = json.dumps(dati_transazione, sort_keys=True).encode("utf-8")
+        dati_payload_hex = "0x"+payload_bytes_grezzi.hex()
         tx_dict = {
-            "from": self.comune_address,
-            "to": self.comune_address,
+            "from": self.indirizzo_comune,
+            "to": self.indirizzo_comune,
             "value": 0,
-            "data": hex_data_payload,
+            "data": dati_payload_hex,
             "gas": 300000,
             "gasPrice": self.w3.eth.gas_price
         }
-
         tx_hash = self.w3.eth.send_transaction(tx_dict)
-        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
-
+        ricevuta = self.w3.eth.wait_for_transaction_receipt(tx_hash)
         ricevuta_cittadino = {
-            "tx_hash": receipt.transactionHash.hex(),
-            "block_number": receipt.blockNumber,
+            "tx_hash": ricevuta.transactionHash.hex(),
+            "block_number": ricevuta.blockNumber,
             "token_hash": token_hash,
             "leaf_index": indice_scheda,
-            "leaf_hash": MerkleTree.hash_leaf(scheda["encrypted_vote"], scheda["token_vote"]).hex(),
+            "leaf_hash": MerkleTree.hash_leaf(scheda["voto_cifrato"], scheda["token_voto"]).hex(),
             "merkle_proof": merkle_proof,
             "merkle_root": merkle_root_attuale
         }
@@ -94,19 +81,18 @@ class BachecaPubblica:
         payload esadecimale della transizione
         """
         voti_bacheca = []
-        latest_block = self.w3.eth.block_number
-
-        for blk_idx in range (1, latest_block+1):
-            blocco = self.w3.eth.get_block(blk_idx, full_transactions=True)
+        ultimo_blocco = self.w3.eth.block_number
+        for blocco_idx in range (1, ultimo_blocco+1):
+            blocco = self.w3.eth.get_block(blocco_idx, full_transactions=True)
             for tx in blocco.transactions:
-                raw_input = tx.get("input", "")
+                input_grezzo = tx.get("input", "")
                 #Se la transazione trasporta un payload di dati valido
-                if raw_input and raw_input!="0x"and raw_input != b"0x":
+                if input_grezzo and input_grezzo!="0x"and input_grezzo != b"0x":
                     try:
-                        if isinstance(raw_input, (bytes, bytearray)):
-                            hex_str = raw_input.hex()
+                        if isinstance(input_grezzo, (bytes, bytearray)):
+                            hex_str = input_grezzo.hex()
                         else:
-                            hex_str = raw_input[2:] if raw_input.startswith("0x") else raw_input
+                            hex_str = input_grezzo[2:] if input_grezzo.startswith("0x") else input_grezzo
 
                         if not hex_str:
                             continue
@@ -115,10 +101,10 @@ class BachecaPubblica:
                         payload_dict = json.loads(json_bytes.decode("utf-8"))
                         voti_bacheca.append({
                             "tx_hash": tx.hash.hex(),
-                            "block_number": blk_idx,
+                            "block_number": blocco_idx,
                             "from": tx["from"],
                             "token_hash":payload_dict.get("token_hash"),
-                            "encrypted_vote":payload_dict.get("encrypted_vote"),
+                            "voto_cifrato":payload_dict.get("voto_cifrato"),
                             "merkle_root": payload_dict.get("merkle_root")
                         })
                     except Exception:
@@ -133,14 +119,13 @@ class BachecaPubblica:
             tx = self.w3.eth.get_transaction(tx_hash)
         except Exception:
             raise ValueError("Transazione non trovata sulla blockchain")
-
-        raw_input = tx.get("input", "")
-        if not raw_input or raw_input == "0x":
+        input_grezzo = tx.get("input", "")
+        if not input_grezzo or input_grezzo == "0x":
             raise ValueError("La transazione non contiene un payload di voto")
-        if isinstance(raw_input, (bytes, bytearray)):
-            hex_str = raw_input.hex()
+        if isinstance(input_grezzo, (bytes, bytearray)):
+            hex_str = input_grezzo.hex()
         else:
-            hex_str = raw_input[2:] if raw_input.startswith("0x") else raw_input
+            hex_str = input_grezzo[2:] if input_grezzo.startswith("0x") else input_grezzo
 
         if not hex_str:
             raise ValueError("La transazione non contiene un payload di voto")
@@ -153,7 +138,6 @@ class BachecaPubblica:
 
         if "merkle_root" not in payload_dict:
             raise ValueError("Payload della transazione privo di merkle_root")
-
         return payload_dict
 
     def esegui_verifica_individuale(self, ricevuta:dict)-> tuple[bool, str]:
@@ -163,14 +147,14 @@ class BachecaPubblica:
         merkle root pubblica.
         """
         tx_hash=ricevuta["tx_hash"]
-        leaf_hash_hex=ricevuta["leaf_hash"]
+        hash_foglia_hex=ricevuta["leaf_hash"]
         proof=ricevuta["merkle_proof"]
         try:
             payload = self.recupera_root_da_tx(tx_hash)
         except ValueError as e:
             return False, str(e)
         merkle_root=payload["merkle_root"]
-        esito= MerkleTree.verify_proof(leaf_hash_hex, proof, merkle_root)
+        esito= MerkleTree.verify_proof(hash_foglia_hex, proof, merkle_root)
         if esito:
             return True, "Voto confermato: incluso nel registro e coerente con la root pubblicata su blockchain."
         else:
