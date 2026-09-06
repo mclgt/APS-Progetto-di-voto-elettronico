@@ -10,27 +10,24 @@ class Comune:
     superato i controlli"""
     def __init__(self, idp_public_key: rsa.RSAPublicKey):
         self.pk_idp=idp_public_key
-        self.used_tokens=set()
-        self.validated_vote=[]
+        self.tokens_usati=set()
+        self.voti_validi=[]
 
-    def _sign_verify_idp(self, t_sign: dict)->bool:
+    def verifica_firma_idp(self, t_firma: dict)->bool:
         """Valida la firma digitale apposta dall'IdP sul 
-        payload formato da (token_vote||pk_eff)"""
-        token_vote=t_sign.get("token_vote")
-        pk_eff=t_sign.get("pk_eff_pem")
-        sign_hex=t_sign.get("signature")
-
-        if not (token_vote and pk_eff and sign_hex):
+        payload formato da (token_voto||pk_eff)"""
+        token_voto=t_firma.get("token_voto")
+        pk_eff=t_firma.get("pk_eff_pem")
+        firma_hex=t_firma.get("firma")
+        if not (token_voto and pk_eff and firma_hex):
             return False
-
-        """Ricostruzione del payload atteso dall'Identity Provider"""
-        expected_payload=f"{token_vote} ||".encode("utf-8")+pk_eff.encode("utf-8")
-        sign_bytes=bytes.fromhex(sign_hex)
-
+        #Ricostruzione del payload atteso dall'Identity Provider
+        payload_atteso=f"{token_voto} ||".encode("utf-8")+pk_eff.encode("utf-8")
+        firma_bytes=bytes.fromhex(firma_hex)
         try:
             self.pk_idp.verify(
-                sign_bytes,
-                expected_payload,
+                firma_bytes,
+                payload_atteso,
                 padding.PSS(
                     mgf=padding.MGF1(hashes.SHA256()),
                     salt_length=padding.PSS.MAX_LENGTH
@@ -43,26 +40,23 @@ class Comune:
         except Exception:
             return False
 
-    def _eff_sign_verify(self, encrypted_vote: dict, t_sign: dict, sign_hex:str)->bool:
+    def verifica_firma_eff(self, voto_cifrato: dict, t_firma: dict, firma_hex:str)->bool:
         """Verifica la firma apposta con la chiave privata effimera sul payload
-        formato da (voto_cifrato||t_sign)"""
-        pk_eff_str=t_sign.get("pk_eff_pem")
+        formato da (voto_cifrato||t_firma)"""
+        pk_eff_str=t_firma.get("pk_eff_pem")
         if not pk_eff_str:
             return False
         try:
-            """caricamento della chiave pubblica effimera nel formato PEM"""
+            #Caricamento della chiave pubblica effimera nel formato PEM
             pk_eff=serialization.load_pem_public_key(pk_eff_str.encode("utf-8"))
-
-            """Ricostruzione del payload serializzato"""
-            enc_vote_bytes=json.dumps(encrypted_vote, sort_keys=True).encode("utf-8")
-            t_sign_bytes=json.dumps(t_sign, sort_keys=True).encode("utf-8")
-            sign_payload=enc_vote_bytes+b"||"+t_sign_bytes
-
-            sign_bytes=bytes.fromhex(sign_hex)
-
+            #Ricostruzione del payload serializzato
+            c_voto_bytes=json.dumps(voto_cifrato, sort_keys=True).encode("utf-8")
+            t_firma_bytes=json.dumps(t_firma, sort_keys=True).encode("utf-8")
+            firma_payload=c_voto_bytes+b"||"+t_firma_bytes
+            firma_bytes=bytes.fromhex(firma_hex)
             pk_eff.verify(
-                sign_bytes,
-                sign_payload,
+                firma_bytes,
+                firma_payload,
                 padding.PSS(
                     mgf=padding.MGF1(hashes.SHA256()),
                     salt_length=padding.PSS.MAX_LENGTH
@@ -75,7 +69,7 @@ class Comune:
         except Exception:
             return False
 
-    def valida_pacchetto_voto(self, package_bytes: bytes)->tuple[bool,str,dict]:
+    def valida_pacchetto_voto(self, byte_pacchetto: bytes)->tuple[bool,str,dict]:
         """Riceve il pacchetto del cittadino ed esegue l'intera catena di validazione:
         1. deserializzazione del pacchetto
         2. verifica autenticità del token (firma idp)
@@ -83,36 +77,32 @@ class Comune:
         4. verifica autenticità del votante anonimo
         """
         try:
-            package = json.loads(package_bytes.decode("utf-8"))
+            package = json.loads(byte_pacchetto.decode("utf-8"))
         except Exception:
             return False, "Formato pacchetto non valido: JSON corrotto", {}
 
-        encrypted_vote = package.get("encrypted_vote")
-        t_sign = package.get("t_sign")
-        signature_eff = package.get("signature")
-
-        if not (encrypted_vote and t_sign and signature_eff):
+        voto_cifrato = package.get("voto_cifrato")
+        t_firma = package.get("t_firma")
+        firma_eff = package.get("firma")
+        if not (voto_cifrato and t_firma and firma_eff):
             return False, "Pacchetto incompleto: campi obbligatori mancanti", {}
-
-        token_vote=t_sign.get("token_vote")
-
-        if not self._sign_verify_idp(t_sign):
+        #Si verifica se la firma dell'IdP è valida
+        token_voto=t_firma.get("token_voto")
+        if not self.verifica_firma_idp(t_firma):
             return False, "Verifica fallita: Firma dell'IdP non valida", {}
-
-        if token_vote in self.used_tokens:
+        #Si verifica se il voto è stato già registrato dal comune per quel token
+        if token_voto in self.tokens_usati:
             return False, "Tentativo di frode: Token di voto già utilizzato", {}
-
-        if not self._eff_sign_verify(encrypted_vote,t_sign,signature_eff):
+        #Si verifica se la firma effimera coincide con quella da cui il messaggio è arrivato
+        if not self.verifica_firma_eff(voto_cifrato,t_firma,firma_eff):
             return False, "Verifica fallita: firma con chiave effimera non valida", {}
-
-        self.used_tokens.add(token_vote)
-
+        #si segnala il token del voto ricevuto come usato
+        self.tokens_usati.add(token_voto)
         scheda_validata={
-            "token_vote": token_vote,
-            "encrypted_vote": encrypted_vote,
-            "t_sign": t_sign
+            "token_voto": token_voto,
+            "voto_cifrato": voto_cifrato,
+            "t_firma": t_firma
         }
-        self.validated_vote.append(scheda_validata)
-
+        self.voti_validi.append(scheda_validata)
         return True, "Pacchetto validato con successo", scheda_validata
     

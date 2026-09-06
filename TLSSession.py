@@ -6,22 +6,23 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 class TLSSession:
     """Simula canale sicuro TLS tra Client e Idp"""
-    def __init__(self, session_key: bytes):
-        self.session_key=session_key
+    def __init__(self, chiave_sessione: bytes):
+        self.chiave_sessione=chiave_sessione
 
-    def send_encrypted(self, plaintext: bytes)-> tuple[bytes,bytes]:
+    def invia_cifrato(self, plaintext: bytes)-> tuple[bytes,bytes]:
         """cifra i dati applicativi su canale TLS usando AES_CTR"""
         nonce = os.urandom(16)
-        cipher = Cipher(algorithms.AES(self.session_key), modes.CTR(nonce))
-        encryptor = cipher.encryptor()
-        ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+        cipher = Cipher(algorithms.AES(self.chiave_sessione), modes.CTR(nonce))
+        cifratore = cipher.encryptor()
+        ciphertext = cifratore.update(plaintext) + cifratore.finalize()
         return nonce, ciphertext
 
-    def receive_encrypted(self, nonce: bytes, ciphertext:bytes)->bytes:
+    def ricevi_cifrato(self, nonce: bytes, ciphertext:bytes)->bytes:
         """Decifra i dati applicativi ricevuti"""
-        cipher = Cipher(algorithms.AES(self.session_key),modes.CTR(nonce))
-        decryptor = cipher.decryptor()
-        return decryptor.update(ciphertext)+decryptor.finalize()
-    
+        cipher = Cipher(algorithms.AES(self.chiave_sessione),modes.CTR(nonce))
+        decifratore = cipher.decryptor()
+        return decifratore.update(ciphertext)+decifratore.finalize()
+
+
     
     

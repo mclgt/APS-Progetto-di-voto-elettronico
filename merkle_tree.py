@@ -8,102 +8,99 @@ class MerkleTree:
         validate. Ogni elemento di schede validate deve contenere un voto
         cifrato e un token di voto"""
         self.schede = schede_validate
-        self.levels: List[List[bytes]] = []
-
+        self.livelli: List[List[bytes]] = []
         #Calcolo hash delle foglie
-        leaves = [self.hash_leaf(s["encrypted_vote"], s["token_vote"]) for s in self.schede]
+        foglie = [self.hash_leaf(s["voto_cifrato"], s["token_voto"]) for s in self.schede]
 
-        if leaves:
-            self._build_tree(leaves)
+        if foglie:
+            self._build_tree(foglie)
 
     @staticmethod
-    def hash_leaf(encrypted_vote: dict, token_vote: str)->bytes:
+    def hash_leaf(voto_cifrato: dict, token_voto: str)->bytes:
         """Calcola l'hash crittografico del nodo foglia combinando
         la serializzazione canonica del voto cifrato e il token 
         univoco"""
-        enc_vote_bytes = json.dumps(encrypted_vote,sort_keys=True).encode("utf-8")
-        payload = enc_vote_bytes+b"||"+token_vote.encode("utf-8")
+        enc_voto_bytes = json.dumps(voto_cifrato,sort_keys=True).encode("utf-8")
+        payload = enc_voto_bytes+b"||"+token_voto.encode("utf-8")
         return hashlib.sha256(payload).digest()
 
     @staticmethod
-    def hash_pair(left: bytes, right: bytes)->bytes:
+    def hash_pair(sinistra: bytes, destra: bytes)->bytes:
         """"
         Calcola l'hash genitore a partire dalla concatenazione
         dei due nodi figli
         """
-        return hashlib.sha256(left+right).digest()
+        return hashlib.sha256(sinistra+destra).digest()
 
-    def _build_tree(self, leaves:List[bytes]):
+    def _build_tree(self, foglie:List[bytes]):
         """
         Costruisce ricorsivamente tutti i livelli dell'albero fino alla radice.
-        Se un livello ha un numero dispari di nodi, duplica l'ultimo nodo"""
-        current_level = leaves
-        self.levels.append(current_level)
+        Se un livello ha un numero dispari di nodi, duplica l'ultimo nodo
+        """
+        livello_corrente = foglie
+        self.livelli.append(livello_corrente)
 
-        while len(current_level)>1:
-            next_level: List[bytes] = []
-            n = len(current_level)
+        while len(livello_corrente)>1:
+            next_livello: List[bytes] = []
+            n = len(livello_corrente)
 
             for i in range(0, n, 2):
-                left=current_level[i]
-                right = current_level[i+1] if (i+1<n) else left 
-                parent = self.hash_pair(left, right)
-                next_level.append(parent)
+                sinistra=livello_corrente[i]
+                destra = livello_corrente[i+1] if (i+1<n) else sinistra 
+                genitore = self.hash_pair(sinistra, destra)
+                next_livello.append(genitore)
 
-            current_level= next_level
-            self.levels.append(current_level)
+            livello_corrente= next_livello
+            self.livelli.append(livello_corrente)
 
     def get_root(self)->str:
         """
         Restituisce la root del merkle tree in formato stringa
-        esadecimale. Se l'albero è vuoto, restituisce una stringa vuota."""
+        esadecimale. Se l'albero è vuoto, restituisce una stringa vuota.
+        """
 
-        if not self.levels or not self.levels[-1]:
+        if not self.livelli or not self.livelli[-1]:
             return ""
-        return self.levels[-1][0].hex()
+        return self.livelli[-1][0].hex()
 
-    def get_proof(self, index: int)->List[Tuple[str,str]]:
+    def get_proof(self, indice: int)->List[Tuple[str,str]]:
         """
         Genera cammino di autenticazione per la foglia all'indice
         specificato. Restituisce una lista di tuple.
         """
-        if not self.levels or index < 0 or index >= len(self.levels[0]):
+        if not self.livelli or indice < 0 or indice >= len(self.livelli[0]):
             raise IndexError("Indice di foglia non valido")
 
         proof:List[Tuple[str,str]] = []
-        curr_idx = index
-
+        curr_idx = indice
         #Itera per tutti i livelli tranne l'ultimo
-        for level in self.levels[:-1]:
-            n = len(level)
+        for livello in self.livelli[:-1]:
+            n = len(livello)
             if curr_idx % 2 == 0:
                 #nodo corrente è sinistro: il fratello è a destra
-                sibling_idx = curr_idx + 1 if curr_idx + 1 < n else curr_idx
-                direction = "R"
+                idx_fratello = curr_idx + 1 if curr_idx + 1 < n else curr_idx
+                lato = "R"
             else:
                 #nodo corrente è destro: il fratello è a sinistra
-                sibling_idx = curr_idx -1
-                direction = "L"
-
-            sibling_hash = level[sibling_idx].hex()
-            proof.append((sibling_hash, direction))
+                idx_fratello = curr_idx -1
+                lato = "L"
+            hash_fratello = livello[idx_fratello].hex()
+            proof.append((hash_fratello, lato))
             #Risale all'indice del genitore nel livello superiore
             curr_idx = curr_idx // 2
         return proof
 
     @staticmethod
-    def verify_proof(leaf_hash_hex: str, proof: List[Tuple[str,str]], expected_root_hex: str)->bool:
+    def verify_proof(hash_foglia_hex: str, proof: List[Tuple[str,str]], hex_radice_atteso: str)->bool:
         """
         Funzione di verifica pubblica eseguibile dal cittadino:
         Ricalcola la radice partedo dall'hash della propria foglia e dai nodi fratelli.
         """
-        current = bytes.fromhex(leaf_hash_hex)
-
-        for sibling_hex, direction in proof:
-            sibling = bytes.fromhex(sibling_hex)
-            if direction == "L":
-                current = hashlib.sha256(sibling+current).digest()
+        corrente = bytes.fromhex(hash_foglia_hex)
+        for hex_fratello, lato in proof:
+            fratello = bytes.fromhex(hex_fratello)
+            if lato == "L":
+                corrente = hashlib.sha256(fratello+corrente).digest()
             else:
-                current = hashlib.sha256(current+sibling).digest()
-
-        return current.hex() == expected_root_hex
+                corrente = hashlib.sha256(corrente+fratello).digest()
+        return corrente.hex() == hex_radice_atteso

@@ -6,24 +6,24 @@ from cryptography.hazmat.primitives import hashes
 PRIME_2048 = (1 << 2048) - 1381 #numero per la frammentazione del segreto
 
 class Scrutinatore:
-    def __init__(self, scrutineer_id):
-        self.scrutineer_id = scrutineer_id
+    def __init__(self, id_scrutinatore):
+        self.id_scrutinatore = id_scrutinatore
         self.sk= rsa.generate_private_key(
             public_exponent=65537,
             key_size=2048
         )
         self.pk= self.sk.public_key()
-        self.share_point =None #tupla ricevuta dall'ente nazionale
+        self.frammento =None #tupla ricevuta dall'ente nazionale
 
-    def receive_verify_package(self, package, ente_pk: rsa.RSAPublicKey, expected_ente_id="GLOBAL"):
+    def ricevi_verifica_pacchetto(self, pacchetto, ente_pk: rsa.RSAPublicKey, id_ente_atteso="GLOBAL"):
         """Decifra il pacchetto ibrido ed esegue l'autenticazione"""
-        package = json.loads(package.decode("utf-8"))
-        ciphered_session_key = bytes.fromhex(package["enc_key"])
-        nonce = bytes.fromhex(package["nonce"])
-        ciphertext=bytes.fromhex(package["ciphertext"])
+        pacchetto = json.loads(pacchetto.decode("utf-8"))
+        chiave_sessione_cifrata = bytes.fromhex(pacchetto["chiave_cifrata"])
+        nonce = bytes.fromhex(pacchetto["nonce"])
+        ciphertext=bytes.fromhex(pacchetto["ciphertext"])
         #Decifra la session key simmetrica tramite RSA-OAEPù
-        session_key = self.sk.decrypt(
-            ciphered_session_key,
+        chiave_sessione = self.sk.decrypt(
+            chiave_sessione_cifrata,
             padding.OAEP(
                 mgf=padding.MGF1(algorithm=hashes.SHA256()),
                 algorithm=hashes.SHA256(),
@@ -31,20 +31,20 @@ class Scrutinatore:
             )
         )
         #decifra il blocco interno simmetrico
-        aesgcm = AESGCM(session_key)
-        decrypted_inner_block = aesgcm.decrypt(nonce, ciphertext, None)
-        inner_block=json.loads(decrypted_inner_block.decode("utf-8"))
+        aesgcm = AESGCM(chiave_sessione)
+        blocco_interno_decifrato = aesgcm.decrypt(nonce, ciphertext, None)
+        blocco_interno=json.loads(blocco_interno_decifrato.decode("utf-8"))
         #verifica dell'identità del mittente
-        if inner_block["sender"] != expected_ente_id:
+        if blocco_interno["sender"] != id_ente_atteso:
             raise ValueError("Identità del mittente non corrispondente")
         #verifica della firma
-        share_bytes = inner_block["share"].encode("utf-8")
-        signature = bytes.fromhex(inner_block["signature"])
+        bytes_frammento = blocco_interno["share"].encode("utf-8")
+        firma = bytes.fromhex(blocco_interno["firma"])
         # ricostruzione del plaintext per la verifica della firma
-        expected_payload = share_bytes + b"||" + self.scrutineer_id.encode("utf-8")
+        payload_atteso = bytes_frammento + b"||" + self.id_scrutinatore.encode("utf-8")
         ente_pk.verify(
-            signature,
-            expected_payload,
+            firma,
+            payload_atteso,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH
@@ -52,33 +52,33 @@ class Scrutinatore:
             hashes.SHA256()
         )
         #Se tutto è valido, si salva il frammento 
-        share_data= json.loads(inner_block["share"])
-        self.share_point=(share_data["idx"], share_data["share_val"])
+        dati_frammento= json.loads(blocco_interno["share"])
+        self.frammento=(dati_frammento["idx"], dati_frammento["valore_frammento"])
         return True
 
     @staticmethod
-    def reconstruct_global_sk(shares_subset, prime=PRIME_2048):
+    def ricostruisci_sk_globale(sottoinsieme_frammenti, prime=PRIME_2048):
         """Ricostruisce la chiave privata globale dell'ente nazionale a partire dai frammenti ricevuti"""
-        secret=0
-        k=len(shares_subset)
+        segreto=0
+        k=len(sottoinsieme_frammenti)
         #Formula dell'interpolazione di lagrange
         for j in range(k): 
-            xj,yj=shares_subset[j]
+            xj,yj=sottoinsieme_frammenti[j]
             num=1
             den=1
             for m in range(k): 
                 if(m==j): 
                     continue    
-                xm, _=shares_subset[m]
+                xm, _=sottoinsieme_frammenti[m]
                 num=(num*(-xm))%prime
                 den=(den*(xj-xm))%prime
             inv_den=pow(den, -1, prime)
-            lagrange_basis=(num*inv_den)%prime
-            secret=(secret+yj*lagrange_basis)%prime 
-        return secret
+            base_lagrange=(num*inv_den)%prime
+            segreto=(segreto+yj*base_lagrange)%prime 
+        return segreto
 
     @staticmethod
-    def decrypt_single_vote(encrypted_vote_dict, reconstructed_d, global_n)->list: 
+    def decifra_singolo_voto(voto_cifrato_dict, d_ricostruito, n_globale)->list: 
         """Decifra una scheda elettorale: 
             1. Recupera i fattori primi p, q 
             2. Istanza la chiave privata dell'Ente
@@ -86,59 +86,63 @@ class Scrutinatore:
             4. Decifratura simmetrica del payload con AES-GCM usando la chiave di sessione 
             inviata tramite RSA
             5. Rimozione del padding casuale e recupero del valore di voto"""
-        p, q = rsa.rsa_recover_prime_factors(global_n, 65537, reconstructed_d)
-        dmp1 = rsa.rsa_crt_dmp1(reconstructed_d, p)
-        dmq1 = rsa.rsa_crt_dmq1(reconstructed_d, q)
-        iqmp = rsa.rsa_crt_iqmp(p, q)
-        #ricostruzione delle chiave privata RSA dell'Ente 
-        private_numbers=rsa.RSAPrivateNumbers(
-            p=p,q=q,d=reconstructed_d, 
-            dmp1=dmp1, dmq1=dmq1, iqmp=iqmp,
-            public_numbers=rsa.RSAPublicNumbers(e=65537, n=global_n)
-        )
-        private_key= private_numbers.private_key()
-        k_enc=bytes.fromhex(encrypted_vote_dict["k_enc"])
-        nonce=bytes.fromhex(encrypted_vote_dict["nonce"])
-        c_vote=bytes.fromhex(encrypted_vote_dict["c_vote"])
-       #decifrare la chiave di sessione simmetrica tramite RSA-OAEP
-        session_key = private_key.decrypt(
-            k_enc,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
+        try:
+            p, q = rsa.rsa_recover_prime_factors(n_globale, 65537, d_ricostruito)
+            dmp1 = rsa.rsa_crt_dmp1(d_ricostruito, p)
+            dmq1 = rsa.rsa_crt_dmq1(d_ricostruito, q)
+            iqmp = rsa.rsa_crt_iqmp(p, q)
+            #ricostruzione delle chiave privata RSA dell'Ente 
+            private_numbers=rsa.RSAPrivateNumbers(
+                p=p,q=q,d=d_ricostruito, 
+                dmp1=dmp1, dmq1=dmq1, iqmp=iqmp,
+                public_numbers=rsa.RSAPublicNumbers(e=65537, n=n_globale)
             )
-        )
-        #decifratura payload
-        aesgcm=AESGCM(session_key)
-        decrypted_payload=aesgcm.decrypt(nonce, c_vote, None)
-        clean_payload=decrypted_payload.split(b"||")[0]
-        return json.loads(clean_payload.decode("utf-8"))
+            private_key= private_numbers.private_key()
+            c_cifr=bytes.fromhex(voto_cifrato_dict["c_cifr"])
+            nonce=bytes.fromhex(voto_cifrato_dict["nonce"])
+            c_voto=bytes.fromhex(voto_cifrato_dict["c_voto"])
+        #decifrare la chiave di sessione simmetrica tramite RSA-OAEP
+            chiave_sessione = private_key.decrypt(
+                c_cifr,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            #decifratura payload
+            aesgcm=AESGCM(chiave_sessione)
+            decrypted_payload=aesgcm.decrypt(nonce, c_voto, None)
+            clean_payload=decrypted_payload.split(b"||")[0]
+            return list(clean_payload)
+        except Exception as e:
+            print(f"[DEBUG ERRORE DECR] Fallimento su scheda specifica: {str(e)}")
+            raise e
 
 
-    def compute_vote(self, encrypted_votes, quorum_shares, global_n, party_list)->dict: 
+    def calcola_voto(self, voti_cifrati, frammenti_quorum, n_globale, lista_partiti)->dict: 
         """Esegue lo spoglio del voto: 
         1. Ricostruisce d tramite t frammenti
         2. Decifra ogni scheda e aggrega le preferenze
         3. Determina il partito vincitore
         4. Firma il verdetto con la sua chiave privata"""
-        reconstructed_d=self.reconstruct_global_sk(quorum_shares)
-        tally={party:0 for party in party_list} #conteggio per ogni partito
-        for enc_ballot in encrypted_votes: 
-            one_hot_vector=self.decrypt_single_vote(enc_ballot, reconstructed_d, global_n)
-            for idx, bit in enumerate(one_hot_vector): 
+        d_ricostruito=self.ricostruisci_sk_globale(frammenti_quorum)
+        conteggio={partito:0 for partito in lista_partiti} #conteggio per ogni partito
+        for scheda_cifrata in voti_cifrati: 
+            vettore_one_hot=self.decifra_singolo_voto(scheda_cifrata, d_ricostruito, n_globale)
+            for idx, bit in enumerate(vettore_one_hot): 
                 if bit == 1: 
-                    tally[party_list[idx]]+=1
+                    conteggio[lista_partiti[idx]]+=1
                     break
-        winner=max(tally, key=tally.get)
-        verdict={
-            "scrutineer_id": self.scrutineer_id,
-            "tally":tally,
-            "winner": winner
+        vincitore=max(conteggio, key=conteggio.get)
+        verdetto={
+            "id_scrutinatore": self.id_scrutinatore,
+            "conteggio":conteggio,
+            "vincitore": vincitore
         }
-        verdict_bytes=json.dumps(verdict, sort_keys=True).encode("utf-8")
-        verdict_signature=self.sk.sign(
-            verdict_bytes, 
+        bytes_verdetto=json.dumps(verdetto, sort_keys=True).encode("utf-8")
+        verdetto_firmaature=self.sk.sign(
+            bytes_verdetto, 
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH
@@ -146,6 +150,6 @@ class Scrutinatore:
             hashes.SHA256()
         )
         return{
-            "verdict": verdict,
-            "signature": verdict_signature.hex()
+            "verdetto": verdetto,
+            "firma": verdetto_firmaature.hex()
         }
